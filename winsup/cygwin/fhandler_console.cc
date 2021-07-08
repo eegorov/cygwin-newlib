@@ -47,8 +47,6 @@ details. */
 		  con.b.srWindow.Top + con.scroll_region.Bottom)
 #define con_is_legacy (shared_console_info && con.is_legacy)
 
-#define CONS_THREAD_SYNC "cygcons.thread_sync"
-
 const unsigned fhandler_console::MAX_WRITE_CHARS = 16384;
 
 fhandler_console::console_state NO_COPY *fhandler_console::shared_console_info;
@@ -170,27 +168,6 @@ console_unit::console_unit (HWND me0):
   n = (_minor_t) ffs (bitmask) - 1;
   if (n < 0)
     api_fatal ("console device allocation failure - too many consoles in use, max consoles is 32");
-}
-
-static DWORD WINAPI
-cons_master_thread (VOID *arg)
-{
-  fhandler_console *fh = (fhandler_console *) arg;
-  tty *ttyp = (tty *) fh->tc ();
-  fhandler_console::handle_set_t handle_set;
-  fh->get_duplicated_handle_set (&handle_set);
-  HANDLE thread_sync_event;
-  DuplicateHandle (GetCurrentProcess (), fh->thread_sync_event,
-		   GetCurrentProcess (), &thread_sync_event,
-		   0, FALSE, DUPLICATE_SAME_ACCESS);
-  SetEvent (thread_sync_event);
-  /* Do not touch class members after here because the class instance
-     may have been destroyed. */
-  fhandler_console::cons_master_thread (&handle_set, ttyp);
-  fhandler_console::close_handle_set (&handle_set);
-  SetEvent (thread_sync_event);
-  CloseHandle (thread_sync_event);
-  return 0;
 }
 
 /* This thread processes signals derived from input messages.
@@ -1348,15 +1325,6 @@ fhandler_console::open (int flags, mode_t)
   debug_printf ("opened conin$ %p, conout$ %p", get_handle (),
 		get_output_handle ());
 
-  if (myself->pid == con.owner)
-    {
-      char name[MAX_PATH];
-      shared_name (name, CONS_THREAD_SYNC, get_minor ());
-      thread_sync_event = CreateEvent(NULL, FALSE, FALSE, name);
-      new cygthread (::cons_master_thread, this, "consm");
-      WaitForSingleObject (thread_sync_event, INFINITE);
-      CloseHandle (thread_sync_event);
-    }
   return 1;
 }
 
@@ -1392,16 +1360,6 @@ fhandler_console::close ()
     }
 
   release_output_mutex ();
-
-  if (shared_console_info && con.owner == myself->pid)
-    {
-      char name[MAX_PATH];
-      shared_name (name, CONS_THREAD_SYNC, get_minor ());
-      thread_sync_event = OpenEvent (MAXIMUM_ALLOWED, FALSE, name);
-      con.owner = 0;
-      WaitForSingleObject (thread_sync_event, INFINITE);
-      CloseHandle (thread_sync_event);
-    }
 
   CloseHandle (input_mutex);
   input_mutex = NULL;
@@ -1577,7 +1535,7 @@ fhandler_console::tcgetattr (struct termios *t)
 }
 
 fhandler_console::fhandler_console (fh_devices unit) :
-  fhandler_termios (), input_ready (false), thread_sync_event (NULL),
+  fhandler_termios (), input_ready (false),
   input_mutex (NULL), output_mutex (NULL)
 {
   if (unit > 0)
@@ -3060,17 +3018,6 @@ fhandler_console::write (const void *vsrc, size_t len)
   if (bg <= bg_eof)
     return (ssize_t) bg;
 
-  if (get_ttyp ()->ti.c_lflag & FLUSHO)
-    return len; /* Discard write data */
-
-  if (get_ttyp ()->output_stopped && is_nonblocking ())
-    {
-      set_errno (EAGAIN);
-      return -1;
-    }
-  while (get_ttyp ()->output_stopped)
-    cygwait (10);
-
   acquire_attach_mutex (INFINITE);
   push_process_state process_state (PID_TTYOU);
 
@@ -3387,15 +3334,6 @@ fhandler_console::write (const void *vsrc, size_t len)
 
   release_attach_mutex ();
   return len;
-}
-
-void
-fhandler_console::doecho (const void *str, DWORD len)
-{
-  bool stopped = get_ttyp ()->output_stopped;
-  get_ttyp ()->output_stopped = false;
-  write (str, len);
-  get_ttyp ()->output_stopped = stopped;
 }
 
 static const struct {

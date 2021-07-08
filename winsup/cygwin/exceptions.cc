@@ -1163,7 +1163,6 @@ ctrl_c_handler (DWORD type)
 	sig = SIGQUIT;
       t->last_ctrl_c = GetTickCount64 ();
       t->kill_pgrp (sig);
-      t->output_stopped = false;
       t->last_ctrl_c = GetTickCount64 ();
       return TRUE;
     }

@@ -2109,7 +2109,6 @@ public:
     HANDLE input_mutex;
     HANDLE output_mutex;
   };
-  HANDLE thread_sync_event;
 private:
   static const unsigned MAX_WRITE_CHARS;
   static console_state *shared_console_info;
@@ -2170,7 +2169,7 @@ private:
 
   void __reg3 read (void *ptr, size_t& len);
   ssize_t __stdcall write (const void *ptr, size_t len);
-  void doecho (const void *str, DWORD len);
+  void doecho (const void *str, DWORD len) { (void) write (str, len); }
   int close ();
   static bool exists () {return !!GetConsoleCP ();}
 
